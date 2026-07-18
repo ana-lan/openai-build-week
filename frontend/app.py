@@ -1,0 +1,159 @@
+"""Simple Streamlit interface for RAG Eval Sidekick."""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+import requests
+import streamlit as st
+
+
+SAMPLE_PATH = Path(__file__).resolve().parents[1] / "sample_data" / "example_triples.json"
+DEFAULT_BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
+HEALTHY_THRESHOLD = 0.6
+METRIC_LABELS = {
+    "faithfulness": "Faithfulness",
+    "answer_relevance": "Answer relevance",
+    "context_precision": "Context precision",
+}
+
+
+def _validate_triples(data: object) -> list[dict[str, object]]:
+    if not isinstance(data, list) or not data:
+        raise ValueError("Expected a non-empty JSON list of triples.")
+    required = {"question", "retrieved_chunks", "answer"}
+    for index, triple in enumerate(data, start=1):
+        if not isinstance(triple, dict) or not required.issubset(triple):
+            raise ValueError(f"Triple {index} must contain question, retrieved_chunks, and answer.")
+    return data
+
+
+def _score_badge(label: str, score: float) -> str:
+    color = "#15803d" if score >= HEALTHY_THRESHOLD else "#b91c1c"
+    background = "#dcfce7" if score >= HEALTHY_THRESHOLD else "#fee2e2"
+    return (
+        f'<span style="display:inline-block;padding:0.3rem 0.55rem;margin:0 0.35rem '
+        f'0.35rem 0;border-radius:0.4rem;background:{background};color:{color};'
+        f'font-weight:600">{label}: {score:.2f}</span>'
+    )
+
+
+def _show_report(payload: dict[str, object]) -> None:
+    report = payload["report"]
+    st.divider()
+    st.header("Evaluation summary")
+
+    count_columns = st.columns(3)
+    count_columns[0].metric("Total", report["total_count"])
+    count_columns[1].metric("Passed", report["passed_count"])
+    count_columns[2].metric("Failed", report["failed_count"])
+
+    st.subheader("Average scores")
+    badges = "".join(
+        _score_badge(METRIC_LABELS[name], float(report["average_scores"][name]))
+        for name in METRIC_LABELS
+    )
+    st.markdown(badges, unsafe_allow_html=True)
+
+    st.subheader("Failure type breakdown")
+    failure_types = report["failure_types"]
+    failure_columns = st.columns(3)
+    failure_columns[0].metric(
+        "Retrieval / context precision",
+        failure_types["retrieval_context_precision"],
+    )
+    failure_columns[1].metric("Faithfulness", failure_types["faithfulness"])
+    failure_columns[2].metric(
+        "Answer relevance", failure_types["answer_relevance"]
+    )
+
+    st.header("Triple results")
+    for index, result in enumerate(payload["results"], start=1):
+        triple = result["triple"]
+        scores = result["scores"]
+        passed = all(float(value) >= HEALTHY_THRESHOLD for value in scores.values())
+        status = "Passed" if passed else "Failed"
+        with st.expander(f"{index}. {status} — {triple['question']}", expanded=not passed):
+            score_badges = "".join(
+                _score_badge(METRIC_LABELS[name], float(scores[name]))
+                for name in METRIC_LABELS
+            )
+            st.markdown(score_badges, unsafe_allow_html=True)
+            if result.get("diagnosis"):
+                st.error(result["diagnosis"])
+
+            st.markdown("**Answer**")
+            st.write(triple["answer"])
+            with st.expander("Retrieved chunks"):
+                for chunk_index, chunk in enumerate(
+                    triple["retrieved_chunks"], start=1
+                ):
+                    st.markdown(f"**Chunk {chunk_index}**")
+                    st.write(chunk)
+
+
+st.set_page_config(page_title="RAG Eval Sidekick", page_icon="🔎", layout="wide")
+st.title("RAG Eval Sidekick")
+st.caption("Score RAG outputs and diagnose retrieval or generation failures.")
+
+if "triples" not in st.session_state:
+    st.session_state.triples = []
+if "evaluation" not in st.session_state:
+    st.session_state.evaluation = None
+
+backend_url = st.sidebar.text_input("Backend URL", DEFAULT_BACKEND_URL).rstrip("/")
+
+left, right = st.columns(2)
+with left:
+    st.subheader("Sample data")
+    if st.button("Load example triples", use_container_width=True):
+        try:
+            st.session_state.triples = _validate_triples(
+                json.loads(SAMPLE_PATH.read_text(encoding="utf-8"))
+            )
+            st.session_state.evaluation = None
+            st.success(f"Loaded {len(st.session_state.triples)} example triples.")
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            st.error(f"Could not load sample data: {exc}")
+
+with right:
+    st.subheader("Custom triple")
+    custom_json = st.text_area(
+        "Paste one triple as JSON",
+        value=json.dumps(
+            {"question": "", "retrieved_chunks": [""], "answer": ""}, indent=2
+        ),
+        height=180,
+    )
+    if st.button("Use custom triple", use_container_width=True):
+        try:
+            custom_triple = json.loads(custom_json)
+            st.session_state.triples = _validate_triples([custom_triple])
+            st.session_state.evaluation = None
+            st.success("Custom triple is ready.")
+        except (json.JSONDecodeError, ValueError) as exc:
+            st.error(f"Invalid triple: {exc}")
+
+st.write(f"Ready to evaluate: **{len(st.session_state.triples)} triple(s)**")
+if st.button(
+    "Run evaluation",
+    type="primary",
+    disabled=not st.session_state.triples,
+    use_container_width=True,
+):
+    try:
+        with st.spinner("Scoring and diagnosing triples..."):
+            response = requests.post(
+                f"{backend_url}/report",
+                json=st.session_state.triples,
+                timeout=300,
+            )
+            response.raise_for_status()
+            st.session_state.evaluation = response.json()
+    except requests.RequestException as exc:
+        st.error(f"Backend request failed: {exc}")
+
+if st.session_state.evaluation:
+    _show_report(st.session_state.evaluation)
