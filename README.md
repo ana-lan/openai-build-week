@@ -197,6 +197,32 @@ BACKEND_URL=http://localhost:8000 streamlit run frontend/app.py
 Open <http://localhost:8501>. The API documentation is at
 <http://localhost:8000/docs>.
 
+## How GPT-5.6 was used
+
+GPT-5.6 is the runtime model that powers the product's generation, evaluation,
+and diagnosis logic. This is distinct from Codex's role as the coding agent used
+to build the implementation.
+
+- **Faithfulness and answer-relevance judging:** For each RAG triple, GPT-5.6
+  evaluates the answer using the explicit rubrics in
+  [`backend/scorer.py`](backend/scorer.py). The faithfulness judge compares claims
+  against the retrieved chunks, while the answer-relevance judge evaluates how
+  directly the answer addresses the question. Structured outputs constrain both
+  scores to the `0.0`–`1.0` range.
+- **Root-cause diagnosis:** When any score is below `0.6`, GPT-5.6 uses the prompt
+  in [`backend/diagnoser.py`](backend/diagnoser.py) to produce a short plain-English
+  explanation. It distinguishes likely retrieval failures from unsupported answer
+  claims and answer-relevance failures.
+- **Built-in mini RAG generation:** GPT-5.6 generates the answer in
+  [`backend/mini_rag.py`](backend/mini_rag.py) after the built-in pipeline chunks,
+  embeds, and retrieves source passages. This is the generation path used for the
+  **Source document** demo workflow and for producing the prepared sample triples.
+- **Auto-tuning generations:** During configuration sweeps,
+  [`backend/tuner.py`](backend/tuner.py) invokes the same GPT-5.6 answer-generation
+  step for every question and each chunk-size/`top_k` combination. Those generated
+  answers are then scored so configurations can be compared on their resulting RAG
+  quality rather than retrieval similarity alone.
+
 ## How Codex was used
 
 This project was built iteratively with Codex as an implementation and testing
