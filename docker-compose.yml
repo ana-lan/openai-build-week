@@ -1,0 +1,40 @@
+services:
+  backend:
+    build: .
+    env_file:
+      - .env
+    environment:
+      RUNS_DB_PATH: /data/runs.db
+    command: uvicorn backend.app:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - rag_eval_history:/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  frontend:
+    build: .
+    environment:
+      BACKEND_URL: http://backend:8000
+    command: >-
+      streamlit run frontend/app.py
+      --server.address 0.0.0.0
+      --server.port 8501
+      --server.headless true
+    ports:
+      - "8501:8501"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  rag_eval_history:

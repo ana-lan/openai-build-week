@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -10,7 +11,9 @@ from pathlib import Path
 from typing import TypedDict
 
 
-DATABASE_PATH = Path(__file__).resolve().parents[1] / "runs.db"
+DATABASE_PATH = Path(
+    os.getenv("RUNS_DB_PATH", Path(__file__).resolve().parents[1] / "runs.db")
+)
 SCORE_NAMES = ("faithfulness", "answer_relevance", "context_precision")
 
 
