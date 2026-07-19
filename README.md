@@ -57,9 +57,14 @@ container recreation does not erase saved runs.
 The repository includes five prepared examples in
 [`sample_data/example_triples.json`](sample_data/example_triples.json):
 
-- Three normal RAG examples about Transformers, attention, and BERT.
-- One deliberately poor retrieval example containing an irrelevant chunk.
-- One deliberately unfaithful answer containing a plausible but unsupported claim.
+- Two clean examples that fully pass the evaluation.
+- One example with an organic, unplanned faithfulness failure: the retrieved chunks
+  do not actually support the answer's specific claim about the definitions of
+  BERT's masked language modeling (MLM) and next sentence prediction (NSP) tasks.
+- One deliberately engineered retrieval failure with an irrelevant chunk swapped
+  into the retrieved context.
+- One deliberately engineered faithfulness failure with a fabricated statistic
+  injected into the answer.
 
 After starting the application:
 
