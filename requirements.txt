@@ -5,3 +5,4 @@ openai
 pydantic
 numpy
 requests
+python-multipart

@@ -25,18 +25,29 @@ class RAGTriple(TypedDict):
     answer: str
 
 
-def _read_source_text() -> str:
-    """Read and validate the local source corpus."""
+def _read_source_text(source_path: str | Path | None = None) -> str:
+    """Read and validate the default or user-provided source corpus."""
+    path = Path(source_path).expanduser() if source_path is not None else SOURCE_PATH
+
+    if not path.exists():
+        default_hint = (
+            " Run `python backend/fetch_source_data.py` first."
+            if source_path is None
+            else ""
+        )
+        raise FileNotFoundError(f"Source file not found: {path}.{default_hint}")
+    if not path.is_file():
+        raise ValueError(f"Source path is not a file: {path}")
+
     try:
-        text = SOURCE_PATH.read_text(encoding="utf-8").strip()
-    except FileNotFoundError as exc:
-        raise FileNotFoundError(
-            f"Source corpus not found at {SOURCE_PATH}. "
-            "Run `python backend/fetch_source_data.py` first."
-        ) from exc
+        text = path.read_text(encoding="utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"Source file must be UTF-8 text: {path}") from exc
+    except OSError as exc:
+        raise OSError(f"Could not read source file {path}: {exc}") from exc
 
     if not text:
-        raise ValueError(f"Source corpus is empty: {SOURCE_PATH}")
+        raise ValueError(f"Source file is empty: {path}")
     return text
 
 
@@ -77,6 +88,9 @@ def _retrieve_chunks(
     question: str, chunks: list[str], client: OpenAI, top_k: int = TOP_K
 ) -> list[str]:
     """Embed the question and chunks, then return the closest chunks."""
+    if top_k <= 0:
+        raise ValueError("top_k must be greater than zero")
+
     embedding_response = client.embeddings.create(
         model=EMBEDDING_MODEL,
         input=[question, *chunks],
@@ -113,21 +127,32 @@ def _generate_answer(question: str, retrieved_chunks: list[str], client: OpenAI)
     return answer
 
 
-def generate_rag_triple(question: str) -> RAGTriple:
+def generate_rag_triple(
+    question: str,
+    source_path: str | Path | None = None,
+    *,
+    chunk_size: int = CHUNK_SIZE_WORDS,
+    top_k: int = TOP_K,
+) -> RAGTriple:
     """Run retrieval and generation for one question.
 
+    ``source_path`` defaults to ``sample_data/source_text.txt`` when omitted.
+    ``chunk_size`` and ``top_k`` expose the retrieval settings used by tuning.
     The OpenAI SDK reads ``OPENAI_API_KEY`` from the environment.
     """
     question = question.strip()
     if not question:
         raise ValueError("question must not be empty")
 
-    chunks = _chunk_text(_read_source_text())
+    if top_k <= 0:
+        raise ValueError("top_k must be greater than zero")
+
+    chunks = _chunk_text(_read_source_text(source_path), chunk_size=chunk_size)
     if not chunks:
         raise ValueError("Source corpus produced no chunks")
 
     client = OpenAI()
-    retrieved_chunks = _retrieve_chunks(question, chunks, client)
+    retrieved_chunks = _retrieve_chunks(question, chunks, client, top_k=top_k)
     answer = _generate_answer(question, retrieved_chunks, client)
 
     return {

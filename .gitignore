@@ -30,5 +30,10 @@ dist/
 .vscode/
 .DS_Store
 
+# Local evaluation history
+runs.db
+runs.db-shm
+runs.db-wal
+
 # Streamlit secrets
 .streamlit/secrets.toml

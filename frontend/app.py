@@ -26,8 +26,41 @@ def _validate_triples(data: object) -> list[dict[str, object]]:
     required = {"question", "retrieved_chunks", "answer"}
     for index, triple in enumerate(data, start=1):
         if not isinstance(triple, dict) or not required.issubset(triple):
-            raise ValueError(f"Triple {index} must contain question, retrieved_chunks, and answer.")
+            raise ValueError(
+                f"Triple {index} must contain question, retrieved_chunks, and answer."
+            )
     return data
+
+
+def _request_report(
+    backend_url: str, triples: list[dict[str, object]]
+) -> dict[str, object]:
+    response = requests.post(
+        f"{backend_url}/report",
+        json=triples,
+        timeout=300,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def _request_run_history(backend_url: str) -> list[dict[str, object]]:
+    response = requests.get(f"{backend_url}/runs", timeout=30)
+    response.raise_for_status()
+    return response.json()
+
+
+def _parse_optional_int_list(value: str, label: str) -> list[int] | None:
+    """Parse comma- or whitespace-separated positive integers, or return None."""
+    if not value.strip():
+        return None
+    try:
+        values = [int(item) for item in value.replace(",", " ").split()]
+    except ValueError as exc:
+        raise ValueError(f"{label} must contain only whole numbers.") from exc
+    if not values or any(item <= 0 for item in values):
+        raise ValueError(f"{label} must contain positive whole numbers.")
+    return values
 
 
 def _score_badge(label: str, score: float) -> str:
@@ -102,10 +135,16 @@ if "triples" not in st.session_state:
     st.session_state.triples = []
 if "evaluation" not in st.session_state:
     st.session_state.evaluation = None
+if "tuning" not in st.session_state:
+    st.session_state.tuning = None
+if "run_history" not in st.session_state:
+    st.session_state.run_history = []
+if "run_comparison" not in st.session_state:
+    st.session_state.run_comparison = None
 
 backend_url = st.sidebar.text_input("Backend URL", DEFAULT_BACKEND_URL).rstrip("/")
 
-left, right = st.columns(2)
+left, middle, right = st.columns(3)
 with left:
     st.subheader("Sample data")
     if st.button("Load example triples", use_container_width=True):
@@ -118,7 +157,7 @@ with left:
         except (OSError, json.JSONDecodeError, ValueError) as exc:
             st.error(f"Could not load sample data: {exc}")
 
-with right:
+with middle:
     st.subheader("Custom triple")
     custom_json = st.text_area(
         "Paste one triple as JSON",
@@ -136,6 +175,43 @@ with right:
         except (json.JSONDecodeError, ValueError) as exc:
             st.error(f"Invalid triple: {exc}")
 
+with right:
+    st.subheader("Source document")
+    with st.form("source_document_form"):
+        source_file = st.file_uploader("Upload a UTF-8 .txt file", type=["txt"])
+        source_question = st.text_input("Question to ask")
+        generate_submitted = st.form_submit_button(
+            "Generate and evaluate", use_container_width=True
+        )
+
+    if generate_submitted:
+        if source_file is None or not source_question.strip():
+            st.error("Choose a .txt file and enter a question.")
+        else:
+            try:
+                with st.spinner("Generating, scoring, and diagnosing..."):
+                    generated_response = requests.post(
+                        f"{backend_url}/generate-triple",
+                        files={
+                            "source_file": (
+                                source_file.name,
+                                source_file.getvalue(),
+                                "text/plain",
+                            )
+                        },
+                        data={"question": source_question.strip()},
+                        timeout=300,
+                    )
+                    generated_response.raise_for_status()
+                    generated_triple = generated_response.json()
+                    st.session_state.triples = _validate_triples([generated_triple])
+                    st.session_state.evaluation = _request_report(
+                        backend_url, st.session_state.triples
+                    )
+                st.success("Generated and evaluated a new triple.")
+            except (requests.RequestException, ValueError) as exc:
+                st.error(f"Could not process source document: {exc}")
+
 st.write(f"Ready to evaluate: **{len(st.session_state.triples)} triple(s)**")
 if st.button(
     "Run evaluation",
@@ -145,15 +221,208 @@ if st.button(
 ):
     try:
         with st.spinner("Scoring and diagnosing triples..."):
-            response = requests.post(
-                f"{backend_url}/report",
-                json=st.session_state.triples,
-                timeout=300,
+            st.session_state.evaluation = _request_report(
+                backend_url, st.session_state.triples
             )
-            response.raise_for_status()
-            st.session_state.evaluation = response.json()
     except requests.RequestException as exc:
         st.error(f"Backend request failed: {exc}")
 
 if st.session_state.evaluation:
     _show_report(st.session_state.evaluation)
+
+st.divider()
+st.header("Auto-tune")
+st.caption(
+    "Compare chunk sizes and retrieval counts using the same questions. "
+    "Enter one question per line. Leave the optional settings blank to test the "
+    "full defaults: chunk sizes 100, 150, 200, 300 and Top K values 2, 3, 5."
+)
+tuning_questions_text = st.text_area(
+    "Evaluation questions",
+    placeholder=(
+        "What role does self-attention play in a Transformer?\n"
+        "How is BERT pre-trained?\n"
+        "What is multi-head attention?"
+    ),
+    height=130,
+)
+tuning_questions = [
+    question.strip()
+    for question in tuning_questions_text.splitlines()
+    if question.strip()
+]
+tuning_settings = st.columns(2)
+chunk_sizes_text = tuning_settings[0].text_input(
+    "Chunk sizes (optional)",
+    placeholder="Example: 100, 200",
+)
+top_ks_text = tuning_settings[1].text_input(
+    "Top K values (optional)",
+    placeholder="Example: 2, 3",
+)
+
+if st.button(
+    "Run auto-tuning",
+    disabled=not tuning_questions,
+    use_container_width=True,
+):
+    try:
+        custom_chunk_sizes = _parse_optional_int_list(
+            chunk_sizes_text, "Chunk sizes"
+        )
+        custom_top_ks = _parse_optional_int_list(top_ks_text, "Top K values")
+        tuning_payload: dict[str, object] = {"questions": tuning_questions}
+        if custom_chunk_sizes is not None:
+            tuning_payload["chunk_sizes"] = custom_chunk_sizes
+        if custom_top_ks is not None:
+            tuning_payload["top_ks"] = custom_top_ks
+
+        with st.spinner("Testing retrieval configurations..."):
+            tuning_response = requests.post(
+                f"{backend_url}/tune",
+                json=tuning_payload,
+                timeout=1800,
+            )
+            tuning_response.raise_for_status()
+            st.session_state.tuning = tuning_response.json()
+    except (requests.RequestException, ValueError) as exc:
+        st.error(f"Auto-tuning request failed: {exc}")
+
+if st.session_state.tuning:
+    tuning = st.session_state.tuning
+    recommendation = tuning["recommendation"]
+    recommended = recommendation["configuration"]
+
+    st.success(recommendation["explanation"])
+    table_rows = []
+    for result in tuning["sweep_results"]:
+        is_recommended = (
+            result["chunk_size"] == recommended["chunk_size"]
+            and result["top_k"] == recommended["top_k"]
+        )
+        table_rows.append(
+            {
+                "Recommendation": "⭐ Recommended" if is_recommended else "",
+                "Chunk size": result["chunk_size"],
+                "Top K": result["top_k"],
+                "Faithfulness": round(result["faithfulness"], 3),
+                "Answer relevance": round(result["answer_relevance"], 3),
+                "Context precision": round(result["context_precision"], 3),
+                "Combined": round(
+                    (
+                        result["faithfulness"]
+                        + result["answer_relevance"]
+                        + result["context_precision"]
+                    )
+                    / 3,
+                    3,
+                ),
+            }
+        )
+
+    st.dataframe(table_rows, hide_index=True, use_container_width=True)
+
+st.divider()
+st.header("Run History")
+st.caption("Save the current evaluation report and compare labeled runs over time.")
+
+save_column, refresh_column = st.columns([3, 1])
+run_label = save_column.text_input(
+    "Label for current run",
+    placeholder="v1-baseline",
+)
+save_clicked = save_column.button(
+    "Save current run",
+    disabled=st.session_state.evaluation is None or not run_label.strip(),
+    use_container_width=True,
+)
+refresh_clicked = refresh_column.button(
+    "Refresh history",
+    use_container_width=True,
+)
+
+if save_clicked:
+    try:
+        response = requests.post(
+            f"{backend_url}/save-run",
+            json={
+                "report": st.session_state.evaluation["report"],
+                "label": run_label.strip(),
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        st.session_state.run_history = _request_run_history(backend_url)
+        st.success(f"Saved run '{run_label.strip()}'.")
+    except requests.RequestException as exc:
+        st.error(f"Could not save run: {exc}")
+
+if refresh_clicked:
+    try:
+        st.session_state.run_history = _request_run_history(backend_url)
+    except requests.RequestException as exc:
+        st.error(f"Could not load run history: {exc}")
+
+if st.session_state.run_history:
+    history_rows = []
+    for run in st.session_state.run_history:
+        report = run["report"]
+        averages = report["average_scores"]
+        history_rows.append(
+            {
+                "Label": run["label"] or "(unlabeled)",
+                "Timestamp": run["timestamp"],
+                "Passed": report["passed_count"],
+                "Failed": report["failed_count"],
+                "Faithfulness": round(averages["faithfulness"], 3),
+                "Answer relevance": round(averages["answer_relevance"], 3),
+                "Context precision": round(averages["context_precision"], 3),
+            }
+        )
+    st.dataframe(history_rows, hide_index=True, use_container_width=True)
+
+    labeled_runs = [run for run in st.session_state.run_history if run["label"]]
+    labels = [run["label"] for run in labeled_runs]
+    if len(labels) >= 2:
+        compare_columns = st.columns(2)
+        label_a = compare_columns[0].selectbox("Run A", labels, index=0)
+        label_b = compare_columns[1].selectbox("Run B", labels, index=1)
+
+        if st.button(
+            "Compare selected runs",
+            disabled=label_a == label_b,
+            use_container_width=True,
+        ):
+            try:
+                comparison_response = requests.get(
+                    f"{backend_url}/compare-runs",
+                    params={"label_a": label_a, "label_b": label_b},
+                    timeout=30,
+                )
+                comparison_response.raise_for_status()
+                st.session_state.run_comparison = comparison_response.json()
+            except requests.RequestException as exc:
+                st.error(f"Could not compare runs: {exc}")
+
+if st.session_state.run_comparison:
+    comparison = st.session_state.run_comparison
+    comparison_rows = []
+    for metric, label in METRIC_LABELS.items():
+        comparison_rows.append(
+            {
+                "Metric": label,
+                comparison["label_a"]: round(
+                    comparison["average_scores_a"][metric], 3
+                ),
+                comparison["label_b"]: round(
+                    comparison["average_scores_b"][metric], 3
+                ),
+                "B − A": round(
+                    comparison["difference_b_minus_a"][metric], 3
+                ),
+            }
+        )
+    st.subheader(
+        f"Comparison: {comparison['label_a']} vs {comparison['label_b']}"
+    )
+    st.dataframe(comparison_rows, hide_index=True, use_container_width=True)

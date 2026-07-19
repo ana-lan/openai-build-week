@@ -166,9 +166,19 @@ def _context_precision(
     return float(np.clip(similarities, 0.0, 1.0).mean())
 
 
-def _score_triple(triple: Mapping[str, object], client: OpenAI) -> TripleScores:
+def _score_triple(
+    triple: Mapping[str, object],
+    client: OpenAI,
+    *,
+    context_precision_override: float | None = None,
+) -> TripleScores:
     """Internal implementation with an injectable client for testing."""
     question, chunks, answer = _validate_triple(triple)
+    if context_precision_override is not None and not (
+        0.0 <= context_precision_override <= 1.0
+    ):
+        raise ValueError("context_precision_override must be from 0 to 1")
+
     faithfulness = _judge_score(
         client=client,
         rubric=FAITHFULNESS_RUBRIC,
@@ -182,10 +192,10 @@ def _score_triple(triple: Mapping[str, object], client: OpenAI) -> TripleScores:
         question=question,
         answer=answer,
     )
-    context_precision = _context_precision(
-        client=client,
-        question=question,
-        chunks=chunks,
+    context_precision = (
+        context_precision_override
+        if context_precision_override is not None
+        else _context_precision(client=client, question=question, chunks=chunks)
     )
     return {
         "faithfulness": faithfulness,
@@ -194,10 +204,23 @@ def _score_triple(triple: Mapping[str, object], client: OpenAI) -> TripleScores:
     }
 
 
-def score_triple(triple: Mapping[str, object]) -> TripleScores:
+def score_triple(
+    triple: Mapping[str, object],
+    *,
+    client: OpenAI | None = None,
+    context_precision_override: float | None = None,
+) -> TripleScores:
     """Score one RAG triple on faithfulness, relevance, and context precision.
 
     The OpenAI SDK reads ``OPENAI_API_KEY`` from the environment. The function
-    makes two GPT-5.6 judge calls and one batched embedding call.
+    makes two GPT-5.6 judge calls and normally one batched embedding call. Tuning
+    code may inject a shared client and a context-precision value calculated from
+    cached embeddings.
     """
-    return _score_triple(triple, OpenAI())
+    if client is None:
+        client = OpenAI()
+    return _score_triple(
+        triple,
+        client,
+        context_precision_override=context_precision_override,
+    )
