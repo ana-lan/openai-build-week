@@ -16,6 +16,8 @@ configuration tuning and SQLite-backed regression history.
 The product has a Streamlit interface at <http://localhost:8501> and a FastAPI API
 at <http://localhost:8000>.
 
+**Demo video:** https://www.youtube.com/watch?v=ZG2_PnxQcJs
+
 ## Run it with Docker Compose (recommended)
 
 Prerequisites: Docker Desktop, or Docker Engine with Docker Compose.
