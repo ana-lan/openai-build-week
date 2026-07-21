@@ -27,6 +27,31 @@ class RAGTriple(BaseModel):
         return [chunk.strip() for chunk in chunks]
 
 
+class SuggestQuestionsRequest(BaseModel):
+    source_text: str = Field(min_length=1, max_length=1_000_000)
+
+    @field_validator("source_text")
+    @classmethod
+    def validate_source_text(cls, source_text: str) -> str:
+        if not source_text.strip():
+            raise ValueError("source_text must not be blank")
+        return source_text.strip()
+
+
+class SuggestedQuestionSet(BaseModel):
+    questions: list[str] = Field(min_length=4, max_length=4)
+
+    @field_validator("questions")
+    @classmethod
+    def validate_questions(cls, questions: list[str]) -> list[str]:
+        normalized = [question.strip() for question in questions]
+        if any(not question for question in normalized):
+            raise ValueError("suggested questions must not be blank")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("suggested questions must be unique")
+        return normalized
+
+
 class Scores(BaseModel):
     faithfulness: float = Field(ge=0.0, le=1.0)
     answer_relevance: float = Field(ge=0.0, le=1.0)

@@ -171,11 +171,55 @@ def _render_evaluate_tab(backend_url: str) -> None:
     with right:
         with st.container(border=True):
             st.subheader("Source document")
+            upload_column, suggest_column = st.columns([3, 2])
+            source_file = upload_column.file_uploader(
+                "Upload a UTF-8 .txt file", type=["txt"], key="source_file"
+            )
+            suggest_column.write("")
+            suggest_clicked = suggest_column.button(
+                "Suggest questions",
+                disabled=source_file is None,
+                use_container_width=True,
+            )
+
+            if suggest_clicked and source_file is not None:
+                try:
+                    source_text = source_file.getvalue().decode("utf-8")
+                    if not source_text.strip():
+                        raise ValueError("The uploaded source file is empty.")
+                    with st.spinner("Reading document and suggesting questions..."):
+                        suggestion_response = requests.post(
+                            f"{backend_url}/suggest-questions",
+                            json={"source_text": source_text},
+                            timeout=120,
+                        )
+                        suggestion_response.raise_for_status()
+                        suggestions = suggestion_response.json()
+                    if not isinstance(suggestions, list) or len(suggestions) != 4:
+                        raise ValueError("Backend returned an invalid suggestion list.")
+                    st.session_state.suggested_questions = suggestions
+                except UnicodeDecodeError:
+                    st.error("The uploaded source file must be valid UTF-8 text.")
+                except (requests.RequestException, ValueError) as exc:
+                    st.error(f"Could not suggest questions: {exc}")
+
+            if st.session_state.suggested_questions:
+                st.caption("Click a suggestion to use it:")
+                question_columns = st.columns(2)
+                for index, suggested_question in enumerate(
+                    st.session_state.suggested_questions
+                ):
+                    if question_columns[index % 2].button(
+                        suggested_question,
+                        key=f"suggested_question_{index}",
+                        use_container_width=True,
+                    ):
+                        st.session_state.source_question = suggested_question
+
             with st.form("source_document_form"):
-                source_file = st.file_uploader(
-                    "Upload a UTF-8 .txt file", type=["txt"]
+                source_question = st.text_input(
+                    "Question to ask", key="source_question"
                 )
-                source_question = st.text_input("Question to ask")
                 generate_submitted = st.form_submit_button(
                     "Generate and evaluate", use_container_width=True
                 )
@@ -452,6 +496,8 @@ if "run_history" not in st.session_state:
     st.session_state.run_history = []
 if "run_comparison" not in st.session_state:
     st.session_state.run_comparison = None
+if "suggested_questions" not in st.session_state:
+    st.session_state.suggested_questions = []
 
 backend_url = st.sidebar.text_input("Backend URL", DEFAULT_BACKEND_URL).rstrip("/")
 evaluate_tab, tuning_tab, history_tab = st.tabs(
