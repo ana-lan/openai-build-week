@@ -133,8 +133,8 @@ def _render_evaluate_tab(backend_url: str) -> None:
 
     left, middle, right = st.columns(3, gap="large")
     with left:
-        with st.container(border=True):
-            st.subheader("Sample data")
+        with st.container(border=True, height="stretch"):
+            st.subheader("📁 Sample data")
             st.write("Load the five prepared good and deliberately flawed examples.")
             if st.button("Load example triples", use_container_width=True):
                 try:
@@ -147,10 +147,11 @@ def _render_evaluate_tab(backend_url: str) -> None:
                     )
                 except (OSError, json.JSONDecodeError, ValueError) as exc:
                     st.error(f"Could not load sample data: {exc}")
+            st.container(height=16, border=False)
 
     with middle:
-        with st.container(border=True):
-            st.subheader("Custom triple")
+        with st.container(border=True, height="stretch"):
+            st.subheader("✏️ Custom triple")
             custom_json = st.text_area(
                 "Paste one triple as JSON",
                 value=json.dumps(
@@ -167,10 +168,11 @@ def _render_evaluate_tab(backend_url: str) -> None:
                     st.success("Custom triple is ready.")
                 except (json.JSONDecodeError, ValueError) as exc:
                     st.error(f"Invalid triple: {exc}")
+            st.container(height=16, border=False)
 
     with right:
-        with st.container(border=True):
-            st.subheader("Source document")
+        with st.container(border=True, height="stretch"):
+            st.subheader("📄 Source document")
             upload_column, suggest_column = st.columns([3, 2])
             source_file = upload_column.file_uploader(
                 "Upload a UTF-8 .txt file", type=["txt"], key="source_file"
@@ -204,14 +206,21 @@ def _render_evaluate_tab(backend_url: str) -> None:
                     st.error(f"Could not suggest questions: {exc}")
 
             if st.session_state.suggested_questions:
-                st.caption("Click a suggestion to use it:")
-                question_columns = st.columns(2)
+                st.divider()
+                st.subheader("Suggested questions")
+                st.caption("Choose one to fill the question field below.")
                 for index, suggested_question in enumerate(
                     st.session_state.suggested_questions
                 ):
-                    if question_columns[index % 2].button(
-                        suggested_question,
+                    display_question = (
+                        suggested_question
+                        if len(suggested_question) <= 72
+                        else f"{suggested_question[:69].rstrip()}..."
+                    )
+                    if st.button(
+                        display_question,
                         key=f"suggested_question_{index}",
+                        help=suggested_question,
                         use_container_width=True,
                     ):
                         st.session_state.source_question = suggested_question
@@ -253,8 +262,9 @@ def _render_evaluate_tab(backend_url: str) -> None:
                         st.success("Generated and evaluated a new triple.")
                     except (requests.RequestException, ValueError) as exc:
                         st.error(f"Could not process source document: {exc}")
+            st.container(height=16, border=False)
 
-    st.write("")
+    st.container(height=24, border=False)
     action_column, status_column = st.columns([3, 1], vertical_alignment="center")
     with action_column:
         run_evaluation = st.button(
