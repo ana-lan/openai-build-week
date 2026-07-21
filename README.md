@@ -106,6 +106,10 @@ runs Sidekick's small built-in RAG pipeline to chunk the document, embed and
 retrieve passages, and generate an answer before evaluating the result. This path
 is useful for demos, onboarding, and producing test data when no external RAG
 pipeline is available. It is not required to evaluate your own system.
+After uploading a document, the **Suggest questions** button uses GPT-5.6 to
+propose four evaluation questions—a mix of straightforward factual questions and
+at least one that requires connecting information across different parts of the
+document. Clicking a suggestion automatically fills the question field.
 
 ## Main features
 
@@ -133,6 +137,7 @@ Relevant endpoints:
 - `POST /score-and-diagnose`
 - `POST /report`
 - `POST /generate-triple` for the optional built-in demo pipeline
+- `POST /suggest-questions` for questions grounded in an uploaded source document
 
 ### 2. Auto-tuning
 
@@ -227,6 +232,10 @@ to build the implementation.
   step for every question and each chunk-size/`top_k` combination. Those generated
   answers are then scored so configurations can be compared on their resulting RAG
   quality rather than retrieval similarity alone.
+- **Question suggestion:** When generating a triple from an uploaded document,
+  GPT-5.6 reads the full source text and proposes four evaluation questions via the
+  `/suggest-questions` endpoint in [`backend/app.py`](backend/app.py), using
+  structured output to guarantee exactly four unique, non-blank questions.
 
 ## How Codex was used
 
